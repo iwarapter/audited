@@ -71,7 +71,7 @@ func Create(config *Config) func(db *gorm.DB) {
 												_, isZero := db.Statement.Schema.PrioritizedPrimaryField.ValueOf(rv)
 												if isZero {
 													db.Statement.Schema.PrioritizedPrimaryField.Set(rv, insertID)
-													insertID--
+													insertID -= db.Statement.Schema.PrioritizedPrimaryField.AutoIncrementIncrement
 												}
 											}
 										} else {
@@ -83,7 +83,7 @@ func Create(config *Config) func(db *gorm.DB) {
 
 												if _, isZero := db.Statement.Schema.PrioritizedPrimaryField.ValueOf(rv); isZero {
 													db.Statement.Schema.PrioritizedPrimaryField.Set(rv, insertID)
-													insertID++
+													insertID += db.Statement.Schema.PrioritizedPrimaryField.AutoIncrementIncrement
 												}
 											}
 										}
@@ -244,7 +244,7 @@ func ConvertToCreateValues(stmt *gorm.Statement) (values clause.Values) {
 
 		for _, db := range stmt.Schema.DBNames {
 			if field := stmt.Schema.FieldsByDBName[db]; !field.HasDefaultValue || field.DefaultValueInterface != nil {
-				if v, ok := selectColumns[db]; (ok && v) || (!ok && !restricted) {
+				if v, ok := selectColumns[db]; (ok && v) || (!ok && (!restricted || field.AutoCreateTime > 0 || field.AutoUpdateTime > 0)) {
 					values.Columns = append(values.Columns, clause.Column{Name: db})
 				}
 			}
@@ -277,6 +277,11 @@ func ConvertToCreateValues(stmt *gorm.Statement) (values clause.Values) {
 						} else if field.AutoCreateTime > 0 || field.AutoUpdateTime > 0 {
 							field.Set(rv, curTime)
 							values.Values[i][idx], _ = field.ValueOf(rv)
+						}
+					} else if field.AutoUpdateTime > 0 {
+						if _, ok := stmt.DB.InstanceGet("gorm:update_track_time"); ok {
+							field.Set(rv, curTime)
+							values.Values[0][idx], _ = field.ValueOf(rv)
 						}
 					}
 				}
@@ -337,7 +342,7 @@ func ConvertToCreateValues(stmt *gorm.Statement) (values clause.Values) {
 				columns := make([]string, 0, len(values.Columns)-1)
 				for _, column := range values.Columns {
 					if field := stmt.Schema.LookUpField(column.Name); field != nil {
-						if !field.PrimaryKey && !field.HasDefaultValue && field.AutoCreateTime == 0 {
+						if !field.PrimaryKey && (!field.HasDefaultValue || field.DefaultValueInterface != nil) && field.AutoCreateTime == 0 {
 							columns = append(columns, column.Name)
 						}
 					}

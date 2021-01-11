@@ -34,6 +34,8 @@ type Config struct {
 	DisableAutomaticPing bool
 	// DisableForeignKeyConstraintWhenMigrating
 	DisableForeignKeyConstraintWhenMigrating bool
+	// DisableNestedTransaction disable nested transaction
+	DisableNestedTransaction bool
 	// AllowGlobalUpdate allow global update
 	AllowGlobalUpdate bool
 	// QueryFields executes the SQL query with all fields of the table
@@ -65,18 +67,19 @@ type DB struct {
 
 // Session session config when create session with Session() method
 type Session struct {
-	DryRun                 bool
-	PrepareStmt            bool
-	NewDB                  bool
-	SkipHooks              bool
-	SkipDefaultTransaction bool
-	AllowGlobalUpdate      bool
-	FullSaveAssociations   bool
-	QueryFields            bool
-	Context                context.Context
-	Logger                 logger.Interface
-	NowFunc                func() time.Time
-	CreateBatchSize        int
+	DryRun                   bool
+	PrepareStmt              bool
+	NewDB                    bool
+	SkipHooks                bool
+	SkipDefaultTransaction   bool
+	DisableNestedTransaction bool
+	AllowGlobalUpdate        bool
+	FullSaveAssociations     bool
+	QueryFields              bool
+	Context                  context.Context
+	Logger                   logger.Interface
+	NowFunc                  func() time.Time
+	CreateBatchSize          int
 }
 
 // Open initialize db session based on dialector
@@ -123,7 +126,7 @@ func Open(dialector Dialector, config *Config) (db *DB, err error) {
 
 	preparedStmt := &PreparedStmtDB{
 		ConnPool:    db.ConnPool,
-		Stmts:       map[string]*sql.Stmt{},
+		Stmts:       map[string]Stmt{},
 		Mux:         &sync.RWMutex{},
 		PreparedSQL: make([]string, 0, 100),
 	}
@@ -160,6 +163,7 @@ func (db *DB) Session(config *Session) *DB {
 		tx       = &DB{
 			Config:    &txConfig,
 			Statement: db.Statement,
+			Error:     db.Error,
 			clone:     1,
 		}
 	)
@@ -204,6 +208,10 @@ func (db *DB) Session(config *Session) *DB {
 
 	if config.SkipHooks {
 		tx.Statement.SkipHooks = true
+	}
+
+	if config.DisableNestedTransaction {
+		txConfig.DisableNestedTransaction = true
 	}
 
 	if !config.NewDB {
@@ -372,15 +380,14 @@ func (db *DB) SetupJoinTable(model interface{}, field string, joinTable interfac
 	return nil
 }
 
-func (db *DB) Use(plugin Plugin) (err error) {
+func (db *DB) Use(plugin Plugin) error {
 	name := plugin.Name()
-	if _, ok := db.Plugins[name]; !ok {
-		if err = plugin.Initialize(db); err == nil {
-			db.Plugins[name] = plugin
-		}
-	} else {
+	if _, ok := db.Plugins[name]; ok {
 		return ErrRegistered
 	}
-
-	return err
+	if err := plugin.Initialize(db); err != nil {
+		return err
+	}
+	db.Plugins[name] = plugin
+	return nil
 }
