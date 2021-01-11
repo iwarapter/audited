@@ -130,7 +130,7 @@ func TestCreateUser(t *testing.T) {
 		assert.Equal(t, "create-test", *product.CreatedBy)
 		assert.Nil(t, product.UpdatedBy)
 		require.NotNil(t, product.CreditCards[0].CreatedBy)
-		assert.Equal(t, "create-test", product.CreditCards[0].CreatedBy)
+		assert.Equal(t, "create-test", *product.CreditCards[0].CreatedBy)
 		assert.Nil(t, product.CreditCards[0].UpdatedBy)
 	})
 	t.Run("we can still save un-audited structs", func(t *testing.T) {

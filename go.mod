@@ -3,6 +3,7 @@ module github.com/iwarapter/audited
 go 1.14
 
 require (
+	github.com/docker/go-connections v0.4.0
 	github.com/lib/pq v1.9.0
 	github.com/stretchr/testify v1.6.1
 	github.com/testcontainers/testcontainers-go v0.9.0
