@@ -70,7 +70,7 @@ func (db *DB) Save(value interface{}) (tx *DB) {
 		if _, ok := tx.Statement.Clauses["ON CONFLICT"]; !ok {
 			tx = tx.Clauses(clause.OnConflict{UpdateAll: true})
 		}
-		tx.callbacks.Create().Execute(tx)
+		tx.callbacks.Create().Execute(tx.InstanceSet("gorm:update_track_time", true))
 	case reflect.Struct:
 		if err := tx.Statement.Parse(value); err == nil && tx.Statement.Schema != nil {
 			for _, pf := range tx.Statement.Schema.PrimaryFields {
@@ -178,8 +178,13 @@ func (db *DB) FindInBatches(dest interface{}, batchSize int, fc func(tx *DB, bat
 			break
 		} else {
 			resultsValue := reflect.Indirect(reflect.ValueOf(dest))
-			primaryValue, _ := result.Statement.Schema.PrioritizedPrimaryField.ValueOf(resultsValue.Index(resultsValue.Len() - 1))
-			queryDB = tx.Clauses(clause.Gt{Column: clause.Column{Table: clause.CurrentTable, Name: clause.PrimaryKey}, Value: primaryValue})
+			if result.Statement.Schema.PrioritizedPrimaryField == nil {
+				tx.AddError(ErrPrimaryKeyRequired)
+				break
+			} else {
+				primaryValue, _ := result.Statement.Schema.PrioritizedPrimaryField.ValueOf(resultsValue.Index(resultsValue.Len() - 1))
+				queryDB = tx.Clauses(clause.Gt{Column: clause.Column{Table: clause.CurrentTable, Name: clause.PrimaryKey}, Value: primaryValue})
+			}
 		}
 	}
 
@@ -355,29 +360,38 @@ func (db *DB) Count(count *int64) (tx *DB) {
 		}()
 	}
 
+	if selectClause, ok := db.Statement.Clauses["SELECT"]; ok {
+		defer func() {
+			db.Statement.Clauses["SELECT"] = selectClause
+		}()
+	} else {
+		defer delete(tx.Statement.Clauses, "SELECT")
+	}
+
 	if len(tx.Statement.Selects) == 0 {
 		tx.Statement.AddClause(clause.Select{Expression: clause.Expr{SQL: "count(1)"}})
-		defer delete(tx.Statement.Clauses, "SELECT")
 	} else if !strings.Contains(strings.ToLower(tx.Statement.Selects[0]), "count(") {
 		expr := clause.Expr{SQL: "count(1)"}
 
 		if len(tx.Statement.Selects) == 1 {
 			dbName := tx.Statement.Selects[0]
-			if tx.Statement.Parse(tx.Statement.Model) == nil {
-				if f := tx.Statement.Schema.LookUpField(dbName); f != nil {
-					dbName = f.DBName
+			fields := strings.FieldsFunc(dbName, utils.IsValidDBNameChar)
+			if len(fields) == 1 || (len(fields) == 3 && strings.ToUpper(fields[1]) == "AS") {
+				if tx.Statement.Parse(tx.Statement.Model) == nil {
+					if f := tx.Statement.Schema.LookUpField(dbName); f != nil {
+						dbName = f.DBName
+					}
 				}
-			}
 
-			if tx.Statement.Distinct {
-				expr = clause.Expr{SQL: "COUNT(DISTINCT(?))", Vars: []interface{}{clause.Column{Name: dbName}}}
-			} else {
-				expr = clause.Expr{SQL: "COUNT(?)", Vars: []interface{}{clause.Column{Name: dbName}}}
+				if tx.Statement.Distinct {
+					expr = clause.Expr{SQL: "COUNT(DISTINCT(?))", Vars: []interface{}{clause.Column{Name: dbName}}}
+				} else {
+					expr = clause.Expr{SQL: "COUNT(?)", Vars: []interface{}{clause.Column{Name: dbName}}}
+				}
 			}
 		}
 
 		tx.Statement.AddClause(clause.Select{Expression: expr})
-		defer delete(tx.Statement.Clauses, "SELECT")
 	}
 
 	if orderByClause, ok := db.Statement.Clauses["ORDER BY"]; ok {
@@ -457,11 +471,13 @@ func (db *DB) Pluck(column string, dest interface{}) (tx *DB) {
 		tx.AddError(ErrModelValueRequired)
 	}
 
-	fields := strings.FieldsFunc(column, utils.IsValidDBNameChar)
-	tx.Statement.AddClauseIfNotExists(clause.Select{
-		Distinct: tx.Statement.Distinct,
-		Columns:  []clause.Column{{Name: column, Raw: len(fields) != 1}},
-	})
+	if len(tx.Statement.Selects) != 1 {
+		fields := strings.FieldsFunc(column, utils.IsValidDBNameChar)
+		tx.Statement.AddClauseIfNotExists(clause.Select{
+			Distinct: tx.Statement.Distinct,
+			Columns:  []clause.Column{{Name: column, Raw: len(fields) != 1}},
+		})
+	}
 	tx.Statement.Dest = dest
 	tx.callbacks.Query().Execute(tx)
 	return
@@ -487,13 +503,15 @@ func (db *DB) Transaction(fc func(tx *DB) error, opts ...*sql.TxOptions) (err er
 
 	if committer, ok := db.Statement.ConnPool.(TxCommitter); ok && committer != nil {
 		// nested transaction
-		err = db.SavePoint(fmt.Sprintf("sp%p", fc)).Error
-		defer func() {
-			// Make sure to rollback when panic, Block error or Commit error
-			if panicked || err != nil {
-				db.RollbackTo(fmt.Sprintf("sp%p", fc))
-			}
-		}()
+		if !db.DisableNestedTransaction {
+			err = db.SavePoint(fmt.Sprintf("sp%p", fc)).Error
+			defer func() {
+				// Make sure to rollback when panic, Block error or Commit error
+				if panicked || err != nil {
+					db.RollbackTo(fmt.Sprintf("sp%p", fc))
+				}
+			}()
+		}
 
 		if err == nil {
 			err = fc(db.Session(&Session{}))
