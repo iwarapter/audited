@@ -3,7 +3,6 @@ package gorm
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -12,6 +11,9 @@ import (
 	"gorm.io/gorm/logger"
 	"gorm.io/gorm/schema"
 )
+
+// for Config.cacheStore store PreparedStmtDB key
+const preparedStmtDBKey = "preparedStmt"
 
 // Config GORM config
 type Config struct {
@@ -56,6 +58,29 @@ type Config struct {
 	cacheStore *sync.Map
 }
 
+func (c *Config) Apply(config *Config) error {
+	if config != c {
+		*config = *c
+	}
+	return nil
+}
+
+func (c *Config) AfterInitialize(db *DB) error {
+	if db != nil {
+		for _, plugin := range c.Plugins {
+			if err := plugin.Initialize(db); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+type Option interface {
+	Apply(*Config) error
+	AfterInitialize(*DB) error
+}
+
 // DB GORM DB definition
 type DB struct {
 	*Config
@@ -83,9 +108,24 @@ type Session struct {
 }
 
 // Open initialize db session based on dialector
-func Open(dialector Dialector, config *Config) (db *DB, err error) {
-	if config == nil {
-		config = &Config{}
+func Open(dialector Dialector, opts ...Option) (db *DB, err error) {
+	config := &Config{}
+
+	for _, opt := range opts {
+		if opt != nil {
+			if err := opt.Apply(config); err != nil {
+				return nil, err
+			}
+			defer func() {
+				opt.AfterInitialize(db)
+			}()
+		}
+	}
+
+	if d, ok := dialector.(interface{ Apply(*Config) error }); ok {
+		if err = d.Apply(config); err != nil {
+			return
+		}
 	}
 
 	if config.NamingStrategy == nil {
@@ -130,7 +170,7 @@ func Open(dialector Dialector, config *Config) (db *DB, err error) {
 		Mux:         &sync.RWMutex{},
 		PreparedSQL: make([]string, 0, 100),
 	}
-	db.cacheStore.Store("preparedStmt", preparedStmt)
+	db.cacheStore.Store(preparedStmtDBKey, preparedStmt)
 
 	if config.PrepareStmt {
 		db.ConnPool = preparedStmt
@@ -167,7 +207,6 @@ func (db *DB) Session(config *Session) *DB {
 			clone:     1,
 		}
 	)
-
 	if config.CreateBatchSize > 0 {
 		tx.Config.CreateBatchSize = config.CreateBatchSize
 	}
@@ -194,7 +233,7 @@ func (db *DB) Session(config *Session) *DB {
 	}
 
 	if config.PrepareStmt {
-		if v, ok := db.cacheStore.Load("preparedStmt"); ok {
+		if v, ok := db.cacheStore.Load(preparedStmtDBKey); ok {
 			preparedStmt := v.(*PreparedStmtDB)
 			tx.Statement.ConnPool = &PreparedStmtDB{
 				ConnPool: db.Config.ConnPool,
@@ -292,15 +331,15 @@ func (db *DB) AddError(err error) error {
 func (db *DB) DB() (*sql.DB, error) {
 	connPool := db.ConnPool
 
-	if stmtDB, ok := connPool.(*PreparedStmtDB); ok {
-		connPool = stmtDB.ConnPool
+	if dbConnector, ok := connPool.(GetDBConnector); ok && dbConnector != nil {
+		return dbConnector.GetDBConn()
 	}
 
 	if sqldb, ok := connPool.(*sql.DB); ok {
 		return sqldb, nil
 	}
 
-	return nil, errors.New("invalid db")
+	return nil, ErrInvaildDB
 }
 
 func (db *DB) getInstance() *DB {
