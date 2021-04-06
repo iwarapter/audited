@@ -10,7 +10,7 @@ import (
 //      audited.AuditedModel
 //    }
 type AuditedModel struct {
-	CreatedBy *string
+	CreatedBy *string `gorm:"not null"`
 	UpdatedBy *string
 }
 

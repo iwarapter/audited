@@ -17,6 +17,7 @@ func isAuditable(db *gorm.DB) (isAuditable bool) {
 	if db.Statement.Schema.ModelType == nil {
 		return false
 	}
+
 	_, isAuditable = reflect.New(db.Statement.Schema.ModelType).Interface().(auditableInterface)
 	return
 }
@@ -24,7 +25,7 @@ func isAuditable(db *gorm.DB) (isAuditable bool) {
 func assignCreatedBy(db *gorm.DB) {
 	if isAuditable(db) {
 		if user, ok := db.Get("audited:current_user"); ok {
-			db.Statement.SetColumn("created_by", user)
+			db.Statement.SetColumn("created_by", user, true)
 		}
 	}
 }
@@ -32,7 +33,7 @@ func assignCreatedBy(db *gorm.DB) {
 func assignUpdatedBy(db *gorm.DB) {
 	if isAuditable(db) {
 		if user, ok := db.Get("audited:current_user"); ok {
-			db.Statement.SetColumn("updated_by", user)
+			db.Statement.SetColumn("updated_by", user, true)
 		}
 	}
 }
