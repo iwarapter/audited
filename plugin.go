@@ -14,6 +14,9 @@ type auditableInterface interface {
 }
 
 func isAuditable(db *gorm.DB) (isAuditable bool) {
+	if db.Statement.Schema == nil {
+		return false
+	}
 	if db.Statement.Schema.ModelType == nil {
 		return false
 	}

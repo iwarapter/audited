@@ -96,7 +96,7 @@ func TestCreateUser(t *testing.T) {
 	t.Run("an audited struct has created_by set", func(t *testing.T) {
 		user := User{Name: "joe blogs"}
 		require.Nil(t, db.Scopes(func(d *gorm.DB) *gorm.DB {
-			return db.Set("audited:current_user", "create-test")
+			return d.Set("audited:current_user", "create-test")
 		}).Create(&user).Error)
 		require.NotNil(t, user.CreatedBy)
 		assert.Equal(t, "create-test", *user.CreatedBy)
@@ -108,7 +108,7 @@ func TestCreateUser(t *testing.T) {
 		birth := time.Date(2009, 11, 17, 20, 34, 58, 651387237, time.UTC)
 		user.DOB = birth
 		require.Nil(t, db.Scopes(func(d *gorm.DB) *gorm.DB {
-			return db.Set("audited:current_user", "update-test")
+			return d.Set("audited:current_user", "update-test")
 		}).Save(&user).Error)
 		require.NotNil(t, user.CreatedBy)
 		assert.Equal(t, "create-test", *user.CreatedBy)
@@ -126,7 +126,7 @@ func TestCreateUser(t *testing.T) {
 			},
 		}
 		require.NoError(t, db.Scopes(func(d *gorm.DB) *gorm.DB {
-			return db.Set("audited:current_user", "create-test")
+			return d.Set("audited:current_user", "create-test")
 		}).Create(&product).Error)
 		assert.Equal(t, "create-test", *product.CreatedBy)
 		assert.Nil(t, product.UpdatedBy)
@@ -138,7 +138,7 @@ func TestCreateUser(t *testing.T) {
 		product.DOB = time.Now()
 
 		require.NoError(t, db.Scopes(func(d *gorm.DB) *gorm.DB {
-			return db.Set("audited:current_user", "update-test")
+			return d.Set("audited:current_user", "update-test")
 		}).Save(&product).Error)
 
 		require.NotNil(t, product.UpdatedBy)
@@ -157,7 +157,7 @@ func TestCreateUser(t *testing.T) {
 			},
 		}
 		require.NoError(t, db.Scopes(func(d *gorm.DB) *gorm.DB {
-			return db.Set("audited:current_user", "create-test")
+			return d.Set("audited:current_user", "create-test")
 		}).Create(&product).Error)
 		assert.Equal(t, "create-test", *product.CreatedBy)
 		assert.Nil(t, product.UpdatedBy)
