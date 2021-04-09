@@ -43,6 +43,7 @@ type Statement struct {
 	CurDestIndex         int
 	attrs                []interface{}
 	assigns              []interface{}
+	scopes               []func(*DB) *DB
 }
 
 type join struct {
@@ -166,6 +167,8 @@ func (stmt *Statement) AddVar(writer clause.Writer, vars ...interface{}) {
 			stmt.AddVar(writer, v.GormValue(stmt.Context, stmt.DB))
 		case clause.Expr:
 			v.Build(stmt)
+		case *clause.Expr:
+			v.Build(stmt)
 		case driver.Valuer:
 			stmt.Vars = append(stmt.Vars, v)
 			stmt.DB.Dialector.BindVarTo(writer, stmt, v)
@@ -182,8 +185,32 @@ func (stmt *Statement) AddVar(writer clause.Writer, vars ...interface{}) {
 			}
 		case *DB:
 			subdb := v.Session(&Session{Logger: logger.Discard, DryRun: true}).getInstance()
-			subdb.Statement.Vars = append(subdb.Statement.Vars, stmt.Vars...)
-			subdb.callbacks.Query().Execute(subdb)
+			if v.Statement.SQL.Len() > 0 {
+				var (
+					vars = subdb.Statement.Vars
+					sql  = v.Statement.SQL.String()
+				)
+
+				subdb.Statement.Vars = make([]interface{}, 0, len(vars))
+				for _, vv := range vars {
+					subdb.Statement.Vars = append(subdb.Statement.Vars, vv)
+					bindvar := strings.Builder{}
+					v.Dialector.BindVarTo(&bindvar, subdb.Statement, vv)
+					sql = strings.Replace(sql, bindvar.String(), "?", 1)
+				}
+
+				subdb.Statement.SQL.Reset()
+				subdb.Statement.Vars = stmt.Vars
+				if strings.Contains(sql, "@") {
+					clause.NamedExpr{SQL: sql, Vars: vars}.Build(subdb.Statement)
+				} else {
+					clause.Expr{SQL: sql, Vars: vars}.Build(subdb.Statement)
+				}
+			} else {
+				subdb.Statement.Vars = append(stmt.Vars, subdb.Statement.Vars...)
+				subdb.callbacks.Query().Execute(subdb)
+			}
+
 			writer.WriteString(subdb.Statement.SQL.String())
 			stmt.Vars = subdb.Statement.Vars
 		default:
@@ -263,7 +290,7 @@ func (stmt *Statement) BuildCondition(query interface{}, args ...interface{}) []
 				if where, ok := cs.Expression.(clause.Where); ok {
 					if len(where.Exprs) == 1 {
 						if orConds, ok := where.Exprs[0].(clause.OrConditions); ok {
-							where.Exprs[0] = clause.AndConditions{Exprs: orConds.Exprs}
+							where.Exprs[0] = clause.AndConditions(orConds)
 						}
 					}
 					conds = append(conds, clause.And(where.Exprs...))
@@ -314,6 +341,10 @@ func (stmt *Statement) BuildCondition(query interface{}, args ...interface{}) []
 			}
 		default:
 			reflectValue := reflect.Indirect(reflect.ValueOf(arg))
+			for reflectValue.Kind() == reflect.Ptr {
+				reflectValue = reflectValue.Elem()
+			}
+
 			if s, err := schema.Parse(arg, stmt.DB.cacheStore, stmt.DB.NamingStrategy); err == nil {
 				selectedColumns := map[string]bool{}
 				if idx == 0 {
@@ -438,6 +469,12 @@ func (stmt *Statement) clone() *Statement {
 		SkipHooks:            stmt.SkipHooks,
 	}
 
+	if stmt.SQL.Len() > 0 {
+		newStmt.SQL.WriteString(stmt.SQL.String())
+		newStmt.Vars = make([]interface{}, 0, len(stmt.Vars))
+		newStmt.Vars = append(newStmt.Vars, stmt.Vars...)
+	}
+
 	for k, c := range stmt.Clauses {
 		newStmt.Clauses[k] = c
 	}
@@ -449,6 +486,11 @@ func (stmt *Statement) clone() *Statement {
 	if len(stmt.Joins) > 0 {
 		newStmt.Joins = make([]join, len(stmt.Joins))
 		copy(newStmt.Joins, stmt.Joins)
+	}
+
+	if len(stmt.scopes) > 0 {
+		newStmt.scopes = make([]func(*DB) *DB, len(stmt.scopes))
+		copy(newStmt.scopes, stmt.scopes)
 	}
 
 	stmt.Settings.Range(func(k, v interface{}) bool {
@@ -570,12 +612,14 @@ func (stmt *Statement) SelectAndOmitColumns(requireCreate, requireUpdate bool) (
 
 	// select columns
 	for _, column := range stmt.Selects {
-		if column == "*" {
+		if stmt.Schema == nil {
+			results[column] = true
+		} else if column == "*" {
 			notRestricted = true
 			for _, dbName := range stmt.Schema.DBNames {
 				results[dbName] = true
 			}
-		} else if column == clause.Associations && stmt.Schema != nil {
+		} else if column == clause.Associations {
 			for _, rel := range stmt.Schema.Relationships.Relations {
 				results[rel.Name] = true
 			}
@@ -588,11 +632,11 @@ func (stmt *Statement) SelectAndOmitColumns(requireCreate, requireUpdate bool) (
 
 	// omit columns
 	for _, omit := range stmt.Omits {
-		if omit == clause.Associations {
-			if stmt.Schema != nil {
-				for _, rel := range stmt.Schema.Relationships.Relations {
-					results[rel.Name] = false
-				}
+		if stmt.Schema == nil {
+			results[omit] = false
+		} else if omit == clause.Associations {
+			for _, rel := range stmt.Schema.Relationships.Relations {
+				results[rel.Name] = false
 			}
 		} else if field := stmt.Schema.LookUpField(omit); field != nil && field.DBName != "" {
 			results[field.DBName] = false

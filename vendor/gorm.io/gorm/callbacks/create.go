@@ -320,6 +320,11 @@ func ConvertToCreateValues(stmt *gorm.Statement) (values clause.Values) {
 						field.Set(stmt.ReflectValue, curTime)
 						values.Values[0][idx], _ = field.ValueOf(stmt.ReflectValue)
 					}
+				} else if field.AutoUpdateTime > 0 {
+					if _, ok := stmt.DB.InstanceGet("gorm:update_track_time"); ok {
+						field.Set(stmt.ReflectValue, curTime)
+						values.Values[0][idx], _ = field.ValueOf(stmt.ReflectValue)
+					}
 				}
 			}
 
@@ -348,15 +353,14 @@ func ConvertToCreateValues(stmt *gorm.Statement) (values clause.Values) {
 					}
 				}
 
-				onConflict := clause.OnConflict{
-					Columns:   make([]clause.Column, len(stmt.Schema.PrimaryFieldDBNames)),
-					DoUpdates: clause.AssignmentColumns(columns),
-				}
+				onConflict.DoUpdates = clause.AssignmentColumns(columns)
 
-				for idx, field := range stmt.Schema.PrimaryFields {
-					onConflict.Columns[idx] = clause.Column{Name: field.DBName}
+				// use primary fields as default OnConflict columns
+				if len(onConflict.Columns) == 0 {
+					for _, field := range stmt.Schema.PrimaryFields {
+						onConflict.Columns = append(onConflict.Columns, clause.Column{Name: field.DBName})
+					}
 				}
-
 				stmt.AddClause(onConflict)
 			}
 		}
