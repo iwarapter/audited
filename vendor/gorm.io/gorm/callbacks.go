@@ -32,6 +32,7 @@ type callbacks struct {
 
 type processor struct {
 	db        *DB
+	Clauses   []string
 	fns       []func(*DB)
 	callbacks []*callback
 }
@@ -72,15 +73,34 @@ func (cs *callbacks) Raw() *processor {
 }
 
 func (p *processor) Execute(db *DB) {
-	curTime := time.Now()
-	stmt := db.Statement
+	// call scopes
+	for len(db.Statement.scopes) > 0 {
+		scopes := db.Statement.scopes
+		db.Statement.scopes = nil
+		for _, scope := range scopes {
+			db = scope(db)
+		}
+	}
 
+	var (
+		curTime           = time.Now()
+		stmt              = db.Statement
+		resetBuildClauses bool
+	)
+
+	if len(stmt.BuildClauses) == 0 {
+		stmt.BuildClauses = p.Clauses
+		resetBuildClauses = true
+	}
+
+	// assign model values
 	if stmt.Model == nil {
 		stmt.Model = stmt.Dest
 	} else if stmt.Dest == nil {
 		stmt.Dest = stmt.Model
 	}
 
+	// parse model values
 	if stmt.Model != nil {
 		if err := stmt.Parse(stmt.Model); err != nil && (!errors.Is(err, schema.ErrUnsupportedDataType) || (stmt.Table == "" && stmt.SQL.Len() == 0)) {
 			if errors.Is(err, schema.ErrUnsupportedDataType) && stmt.Table == "" {
@@ -91,13 +111,18 @@ func (p *processor) Execute(db *DB) {
 		}
 	}
 
+	// assign stmt.ReflectValue
 	if stmt.Dest != nil {
 		stmt.ReflectValue = reflect.ValueOf(stmt.Dest)
 		for stmt.ReflectValue.Kind() == reflect.Ptr {
+			if stmt.ReflectValue.IsNil() && stmt.ReflectValue.CanAddr() {
+				stmt.ReflectValue.Set(reflect.New(stmt.ReflectValue.Type().Elem()))
+			}
+
 			stmt.ReflectValue = stmt.ReflectValue.Elem()
 		}
 		if !stmt.ReflectValue.IsValid() {
-			db.AddError(fmt.Errorf("invalid value"))
+			db.AddError(ErrInvalidValue)
 		}
 	}
 
@@ -112,6 +137,10 @@ func (p *processor) Execute(db *DB) {
 	if !stmt.DB.DryRun {
 		stmt.SQL.Reset()
 		stmt.Vars = nil
+	}
+
+	if resetBuildClauses {
+		stmt.BuildClauses = nil
 	}
 }
 
