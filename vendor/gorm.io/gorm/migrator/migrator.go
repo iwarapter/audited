@@ -12,6 +12,11 @@ import (
 	"gorm.io/gorm/schema"
 )
 
+var (
+	regRealDataType = regexp.MustCompile(`[^\d](\d+)[^\d]?`)
+	regFullDataType = regexp.MustCompile(`[^\d]*(\d+)[^\d]?`)
+)
+
 // Migrator m struct
 type Migrator struct {
 	Config
@@ -114,13 +119,10 @@ func (m Migrator) AutoMigrate(values ...interface{}) error {
 
 				for _, rel := range stmt.Schema.Relationships.Relations {
 					if !m.DB.Config.DisableForeignKeyConstraintWhenMigrating {
-						if constraint := rel.ParseConstraint(); constraint != nil {
-							if constraint.Schema == stmt.Schema {
-								if !tx.Migrator().HasConstraint(value, constraint.Name) {
-									if err := tx.Migrator().CreateConstraint(value, constraint.Name); err != nil {
-										return err
-									}
-								}
+						if constraint := rel.ParseConstraint(); constraint != nil &&
+							constraint.Schema == stmt.Schema && !tx.Migrator().HasConstraint(value, constraint.Name) {
+							if err := tx.Migrator().CreateConstraint(value, constraint.Name); err != nil {
+								return err
 							}
 						}
 					}
@@ -289,13 +291,20 @@ func (m Migrator) RenameTable(oldName, newName interface{}) error {
 
 func (m Migrator) AddColumn(value interface{}, field string) error {
 	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
-		if field := stmt.Schema.LookUpField(field); field != nil {
+		// avoid using the same name field
+		f := stmt.Schema.LookUpField(field)
+		if f == nil {
+			return fmt.Errorf("failed to look up field with name: %s", field)
+		}
+
+		if !f.IgnoreMigration {
 			return m.DB.Exec(
 				"ALTER TABLE ? ADD ? ?",
-				m.CurrentTable(stmt), clause.Column{Name: field.DBName}, m.DB.Migrator().FullDataTypeOf(field),
+				m.CurrentTable(stmt), clause.Column{Name: f.DBName}, m.DB.Migrator().FullDataTypeOf(f),
 			).Error
 		}
-		return fmt.Errorf("failed to look up field with name: %s", field)
+
+		return nil
 	})
 }
 
@@ -373,8 +382,10 @@ func (m Migrator) MigrateColumn(value interface{}, field *schema.Field, columnTy
 			alterColumn = true
 		} else {
 			// has size in data type and not equal
-			matches := regexp.MustCompile(`[^\d](\d+)[^\d]?`).FindAllStringSubmatch(realDataType, -1)
-			matches2 := regexp.MustCompile(`[^\d]*(\d+)[^\d]?`).FindAllStringSubmatch(fullDataType, -1)
+
+			// Since the following code is frequently called in the for loop, reg optimization is needed here
+			matches := regRealDataType.FindAllStringSubmatch(realDataType, -1)
+			matches2 := regFullDataType.FindAllStringSubmatch(fullDataType, -1)
 			if (len(matches) == 1 && matches[0][1] != fmt.Sprint(field.Size) || !field.PrimaryKey) && (len(matches2) == 1 && matches2[0][1] != fmt.Sprint(length)) {
 				alterColumn = true
 			}
@@ -396,7 +407,7 @@ func (m Migrator) MigrateColumn(value interface{}, field *schema.Field, columnTy
 		}
 	}
 
-	if alterColumn {
+	if alterColumn && !field.IgnoreMigration {
 		return m.DB.Migrator().AlterColumn(value, field.Name)
 	}
 
@@ -490,7 +501,8 @@ func (m Migrator) GuessConstraintAndTable(stmt *gorm.Statement, name string) (_ 
 			}
 		}
 	}
-	return nil, nil, ""
+
+	return nil, nil, stmt.Schema.Table
 }
 
 func (m Migrator) CreateConstraint(value interface{}, name string) error {

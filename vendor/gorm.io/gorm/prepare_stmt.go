@@ -18,6 +18,18 @@ type PreparedStmtDB struct {
 	ConnPool
 }
 
+func (db *PreparedStmtDB) GetDBConn() (*sql.DB, error) {
+	if dbConnector, ok := db.ConnPool.(GetDBConnector); ok && dbConnector != nil {
+		return dbConnector.GetDBConn()
+	}
+
+	if sqldb, ok := db.ConnPool.(*sql.DB); ok {
+		return sqldb, nil
+	}
+
+	return nil, ErrInvalidDB
+}
+
 func (db *PreparedStmtDB) Close() {
 	db.Mux.Lock()
 	for _, query := range db.PreparedSQL {
@@ -52,7 +64,7 @@ func (db *PreparedStmtDB) prepare(ctx context.Context, conn ConnPool, isTransact
 		db.Stmts[query] = Stmt{Stmt: stmt, Transaction: isTransaction}
 		db.PreparedSQL = append(db.PreparedSQL, query)
 	}
-	db.Mux.Unlock()
+	defer db.Mux.Unlock()
 
 	return db.Stmts[query], err
 }
