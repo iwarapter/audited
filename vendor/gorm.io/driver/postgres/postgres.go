@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"strings"
 
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/stdlib"
@@ -44,7 +43,9 @@ func (dialector Dialector) Name() string {
 func (dialector Dialector) Initialize(db *gorm.DB) (err error) {
 	// register callbacks
 	callbacks.RegisterDefaultCallbacks(db, &callbacks.Config{
-		WithReturning: !dialector.WithoutReturning,
+		CreateClauses: []string{"INSERT", "VALUES", "ON CONFLICT", "RETURNING"},
+		UpdateClauses: []string{"UPDATE", "SET", "WHERE", "RETURNING"},
+		DeleteClauses: []string{"DELETE", "FROM", "WHERE", "RETURNING"},
 	})
 
 	if dialector.Conn != nil {
@@ -88,19 +89,51 @@ func (dialector Dialector) BindVarTo(writer clause.Writer, stmt *gorm.Statement,
 }
 
 func (dialector Dialector) QuoteTo(writer clause.Writer, str string) {
-	writer.WriteByte('"')
-	if strings.Contains(str, ".") {
-		for idx, str := range strings.Split(str, ".") {
-			if idx > 0 {
-				writer.WriteString(`."`)
+	var (
+		underQuoted, selfQuoted bool
+		continuousBacktick      int8
+		shiftDelimiter          int8
+	)
+
+	for _, v := range []byte(str) {
+		switch v {
+		case '"':
+			continuousBacktick++
+			if continuousBacktick == 2 {
+				writer.WriteString(`""`)
+				continuousBacktick = 0
 			}
-			writer.WriteString(str)
-			writer.WriteByte('"')
+		case '.':
+			if continuousBacktick > 0 || !selfQuoted {
+				shiftDelimiter = 0
+				underQuoted = false
+				continuousBacktick = 0
+				writer.WriteString(`"`)
+			}
+			writer.WriteByte(v)
+			continue
+		default:
+			if shiftDelimiter-continuousBacktick <= 0 && !underQuoted {
+				writer.WriteByte('"')
+				underQuoted = true
+				if selfQuoted = continuousBacktick > 0; selfQuoted {
+					continuousBacktick -= 1
+				}
+			}
+
+			for ; continuousBacktick > 0; continuousBacktick -= 1 {
+				writer.WriteString(`""`)
+			}
+
+			writer.WriteByte(v)
 		}
-	} else {
-		writer.WriteString(str)
-		writer.WriteByte('"')
+		shiftDelimiter++
 	}
+
+	if continuousBacktick > 0 && !selfQuoted {
+		writer.WriteString(`""`)
+	}
+	writer.WriteString(`"`)
 }
 
 var numericPlaceholder = regexp.MustCompile("\\$(\\d+)")
@@ -140,7 +173,7 @@ func (dialector Dialector) DataTypeOf(field *schema.Field) string {
 	case schema.Float:
 		if field.Precision > 0 {
 			if field.Scale > 0 {
-				fmt.Sprintf("numeric(%d, %d)", field.Precision, field.Scale)
+				return fmt.Sprintf("numeric(%d, %d)", field.Precision, field.Scale)
 			}
 			return fmt.Sprintf("numeric(%d)", field.Precision)
 		}
