@@ -114,7 +114,7 @@ github.com/jackc/pgx/v4/stdlib
 github.com/jinzhu/inflection
 # github.com/jinzhu/now v1.1.1
 github.com/jinzhu/now
-# github.com/lib/pq v1.9.0
+# github.com/lib/pq v1.10.5
 ## explicit
 github.com/lib/pq
 github.com/lib/pq/oid
