@@ -4,7 +4,7 @@ go 1.14
 
 require (
 	github.com/docker/go-connections v0.4.0
-	github.com/lib/pq v1.9.0
+	github.com/lib/pq v1.10.6
 	github.com/stretchr/testify v1.7.0
 	github.com/testcontainers/testcontainers-go v0.12.0
 	gorm.io/driver/postgres v1.0.6
