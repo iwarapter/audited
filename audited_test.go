@@ -1,21 +1,15 @@
 package audited_test
 
 import (
-	"context"
-	"fmt"
 	"log"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/docker/go-connections/nat"
-
 	"github.com/iwarapter/audited"
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -24,43 +18,16 @@ import (
 var db *gorm.DB
 
 func TestMain(m *testing.M) {
-	dbURL := func(port nat.Port) string {
-		return fmt.Sprintf("postgres://postgres:postgres@localhost:%s/postgres?sslmode=disable", port.Port())
-	}
-	ctx := context.Background()
-	req := testcontainers.ContainerRequest{
-		Image:        "postgres:latest",
-		ExposedPorts: []string{"5432/tcp"},
-		Cmd:          []string{"postgres", "-c", "fsync=off"},
-		Env: map[string]string{
-			"POSTGRES_PASSWORD": "postgres",
-			"POSTGRES_USER":     "postgres",
-			"POSTGRES_DB":       "postgres",
-		},
-		WaitingFor: wait.ForSQL("5432/tcp", "postgres", dbURL).Timeout(time.Second * 5),
-	}
-	postgresC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		log.Fatalf("could not start container: %v", err)
-	}
-	dbPort, err := postgresC.MappedPort(ctx, "5432/tcp")
-	if err != nil {
-		log.Fatalf("could not get mapped port: %v", err)
-	}
-	defer postgresC.Terminate(ctx)
 	newLogger := logger.New(
 		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
 		logger.Config{
-			SlowThreshold: time.Second,   // Slow SQL threshold
+			SlowThreshold: time.Second, // Slow SQL threshold
 			LogLevel:      logger.Info, // Log level
-			Colorful:      true,         // Disable color
+			Colorful:      true,        // Disable color
 		},
 	)
-
-	db, err = gorm.Open(postgres.Open(fmt.Sprintf("host=localhost port=%s user=postgres dbname=postgres password=postgres sslmode=disable", dbPort.Port())), &gorm.Config{
+	var err error
+	db, err = gorm.Open(postgres.Open("host=localhost port=5432 user=postgres dbname=postgres password=postgres sslmode=disable"), &gorm.Config{
 		Logger: newLogger,
 	})
 	if err != nil {
