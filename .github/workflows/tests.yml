@@ -9,9 +9,12 @@ jobs:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
 
+      - name: Start docker-compose
+        run: docker-compose up -d
+
       - name: Unit tests
         run: |
-          TF_ACC=1 go test -mod=vendor ./... -v -trimpath -coverprofile=coverage.out
+          go test ./... -v -trimpath -coverprofile=coverage.out
           go tool cover -func=coverage.out
 
 
