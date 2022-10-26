@@ -4,7 +4,7 @@ go 1.14
 
 require (
 	github.com/jinzhu/now v1.1.5 // indirect
-	github.com/lib/pq v1.10.2
+	github.com/lib/pq v1.10.7
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/stretchr/testify v1.8.0
 	gorm.io/driver/postgres v1.4.5
